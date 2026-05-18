@@ -332,7 +332,7 @@ pub fn get_sort_key(filepath: &Path) -> (u8, u32, String) {
 }
 
 pub fn resolve_ctdbtocid(folder_path: &Path, tracks_filter: Option<&str>) -> Option<String> {
-    log::debug!("Scanning directory for FLAC files: {}", folder_path.display());
+    log::debug!("Scanning directory for files: {}", folder_path.display());
     if !folder_path.exists() {
         log::error!("Source directory does not exist: {}", folder_path.display());
         return None;
@@ -340,16 +340,16 @@ pub fn resolve_ctdbtocid(folder_path: &Path, tracks_filter: Option<&str>) -> Opt
 
     let globset = tracks_filter.and_then(|f| build_globset(f).ok());
 
-    let all_flacs: Vec<PathBuf> = walkdir::WalkDir::new(folder_path)
+    let all_files: Vec<PathBuf> = walkdir::WalkDir::new(folder_path)
         .into_iter()
         .filter_map(std::result::Result::ok)
         .map(|entry| entry.path().to_path_buf())
-        .filter(|p| p.is_file() && p.extension().and_then(|s| s.to_str()) == Some("flac"))
+        .filter(|p| p.is_file())
         .collect();
 
-    log::debug!("Found {} total FLAC files in the directory tree.", all_flacs.len());
+    log::debug!("Found {} total files in the directory tree.", all_files.len());
 
-    let mut files: Vec<PathBuf> = all_flacs.into_iter()
+    let mut files: Vec<PathBuf> = all_files.into_iter()
         .filter(|p| {
             if let Some(gs) = &globset {
                 if let Ok(rel) = p.strip_prefix(folder_path) {
@@ -373,10 +373,10 @@ pub fn resolve_ctdbtocid(folder_path: &Path, tracks_filter: Option<&str>) -> Opt
         })
         .collect();
 
-    log::debug!("{} FLAC files matched the tracks filter.", files.len());
+    log::debug!("{} files matched the tracks filter.", files.len());
 
     if files.is_empty() {
-        log::error!("No FLAC files available to generate CTDB TOCID.");
+        log::error!("No files available to generate CTDB TOCID.");
         return None;
     }
 

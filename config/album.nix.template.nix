@@ -42,6 +42,13 @@ let
     "      catalognumber = ${toNixVal (get "album.metadata.catalognumber" "")};\n" +
     "      release_date = ${toNixVal (get "album.metadata.release_date" "")};\n" +
     "    };\n" +
+    "    url = {\n" +
+    "      ctdbtocid = ${toNixVal (get "album.url.ctdbtocid" "")};\n" +
+    "      discogs_release = ${toNixVal (get "album.url.discogs_release" "")};\n" +
+    "      musicbrainz_release = ${toNixVal (get "album.url.musicbrainz_release" "")};\n" +
+    "      discogs_master = ${toNixVal (get "album.url.discogs_master" "")};\n" +
+    "      musicbrainz_release_group = ${toNixVal (get "album.url.musicbrainz_release_group" "")};\n" +
+    "    };\n" +
     "    mbid = {\n" +
     "      musicbrainz_albumid = ${toNixVal (get "album.mbid.musicbrainz_albumid" "")};\n" +
     "      musicbrainz_albumartistid = ${toNixVal (get "album.mbid.musicbrainz_albumartistid" "")};\n" +

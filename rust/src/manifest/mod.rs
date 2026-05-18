@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::fs;
 use serde_json::{json, Value};
+use crate::config::AppConfig;
 
 pub fn run(path_str: &str, tracks_filter: &str, torrent_path: Option<&str>, metadata_path: Option<&str>, intermediary: bool) -> Result<()> {
     let target_dir = Path::new(path_str).canonicalize().unwrap_or_else(|_| PathBuf::from(path_str));
@@ -88,7 +89,8 @@ pub fn run(path_str: &str, tracks_filter: &str, torrent_path: Option<&str>, meta
                 "total_discs": 1
             }, 
             "metadata": {}, 
-            "mbid": {} 
+            "mbid": {},
+            "url": {}
         },
         "tracks": []
     });
@@ -107,6 +109,29 @@ pub fn run(path_str: &str, tracks_filter: &str, torrent_path: Option<&str>, meta
             }
         }
     }
+
+    let mut origin_folder: Option<PathBuf> = None;
+    if album_nix_path.exists() {
+        let config = AppConfig::load();
+        let store_path = config.get_store_path();
+        let origin_base_path = crate::utils::expand_path(config.origin.as_deref().unwrap_or("."));
+        let source_type = data["source"]["type"].as_str();
+
+        if let Ok(res) = crate::utils::resolve_source_origin(&album_nix_path, source_type, &store_path, &origin_base_path) {
+            let resolved_origin = PathBuf::from(res.origin_path);
+            if resolved_origin.exists() {
+                origin_folder = Some(resolved_origin);
+            }
+        }
+    }
+
+    data["album"]["url"]["ctdbtocid"] = if let Some(folder) = origin_folder
+        && let Some(ctdb) = crate::utils::resolve_ctdbtocid(&folder, Some(tracks_filter))
+    {
+        json!(format!("https://db.cuetools.net/ui/?tocid={ctdb}"))
+    } else {
+        json!("")
+    };
 
     let album_name = data["album"]["metadata"]["album"].as_str().unwrap_or(&torrent.name);
     let artist_name = data["album"]["metadata"]["albumartist"].as_str().unwrap_or("");
@@ -230,7 +255,23 @@ fn apply_remote_metadata(data: &mut Value, remote: Value) {
     data["album"]["mbid"]["musicbrainz_releasegroupid"] = rg.get("id").cloned().unwrap_or(Value::Null);
     data["album"]["mbid"]["musicbrainz_albumartistid"] = artist_id.clone();
 
+    if let Some(rg_id) = rg.get("id").and_then(|id| id.as_str()) {
+        data["album"]["url"]["musicbrainz_release_group"] = json!(format!("https://musicbrainz.org/release-group/{rg_id}"));
+    }
+    if let Some(a_id) = artist_id.as_str() {
+        data["album"]["url"]["musicbrainz_artist"] = json!(format!("https://musicbrainz.org/artist/{a_id}"));
+    }
+
     if let Some(dg) = discogs {
+        if let Some(urls) = dg.get("urls") {
+            if let Some(r_url) = urls.get("release") {
+                data["album"]["url"]["discogs_release"] = r_url.clone();
+            }
+            if let Some(m_url) = urls.get("master") {
+                data["album"]["url"]["discogs_master"] = m_url.clone();
+            }
+        }
+
         let source = dg.get("master").or(dg.get("release"));
         if let Some(s) = source {
             if let Some(genres) = s.get("genres") { data["album"]["metadata"]["genre"] = genres.clone(); }
@@ -240,6 +281,11 @@ fn apply_remote_metadata(data: &mut Value, remote: Value) {
 
     if let Some(r) = rel {
         data["album"]["mbid"]["musicbrainz_albumid"] = r.get("id").cloned().unwrap_or(Value::Null);
+        
+        if let Some(r_id) = r.get("id").and_then(|id| id.as_str()) {
+            data["album"]["url"]["musicbrainz_release"] = json!(format!("https://musicbrainz.org/release/{r_id}"));
+        }
+        
         if let Some(country) = r.get("country") { data["album"]["metadata"]["country"] = country.clone(); }
         if let Some(release_date) = r.get("date") { data["album"]["metadata"]["release_date"] = release_date.clone(); }
         

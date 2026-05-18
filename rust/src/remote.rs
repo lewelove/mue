@@ -41,7 +41,7 @@ pub fn fetch_musicbrainz_data(url: &str) -> Result<Value> {
     if is_rg {
         let rg_url = format!("https://musicbrainz.org/ws/2/release-group/{entity_id}?inc=tags+artist-credits+url-rels&fmt=json");
         let rg: Value = client.get(rg_url).send()?.json()?;
-        data["discogs"] = get_discogs_data(&client, &rg);
+        data["discogs"] = fetch_discogs_data(&client, &rg);
         data["release_group"] = rg;
     } else {
         let rel_url = format!("https://musicbrainz.org/ws/2/release/{entity_id}?inc=labels+release-groups+url-rels+recordings+artist-credits+media&fmt=json");
@@ -55,7 +55,15 @@ pub fn fetch_musicbrainz_data(url: &str) -> Result<Value> {
             None
         };
 
-        data["discogs"] = get_discogs_data(&client, &release);
+        let mut discogs_info = fetch_discogs_data(&client, &release);
+        
+        if discogs_info.get("urls").and_then(|u| u.as_object()).is_none_or(|m| m.is_empty())
+            && let Some(rg_obj) = &rg
+        {
+            discogs_info = fetch_discogs_data(&client, rg_obj);
+        }
+
+        data["discogs"] = discogs_info;
         data["release"] = release;
         data["release_group"] = rg.unwrap_or_else(|| json!({}));
     }
@@ -64,8 +72,7 @@ pub fn fetch_musicbrainz_data(url: &str) -> Result<Value> {
     Ok(data)
 }
 
-fn get_discogs_data(client: &reqwest::blocking::Client, mb_obj: &Value) -> Value {
-    let Some(token) = get_discogs_token() else { return json!({}); };
+fn fetch_discogs_data(client: &reqwest::blocking::Client, mb_obj: &Value) -> Value {
     let mut discogs_url = String::new();
 
     if let Some(relations) = mb_obj.get("relations").and_then(|r| r.as_array()) {
@@ -81,31 +88,45 @@ fn get_discogs_data(client: &reqwest::blocking::Client, mb_obj: &Value) -> Value
 
     if discogs_url.is_empty() { return json!({}); }
 
-    let auth_header = format!("Discogs token={token}");
     let rel_re = Regex::new(r"release/(\d+)").unwrap();
     let mas_re = Regex::new(r"master/(\d+)").unwrap();
 
+    let token_opt = get_discogs_token();
+    let auth_header = token_opt.map(|t| format!("Discogs token={t}"));
+
+    let mut urls = json!({});
+    let mut result = json!({});
+
     if let Some(caps) = rel_re.captures(&discogs_url) {
         let id = caps.get(1).unwrap().as_str();
-        if let Ok(resp) = client.get(format!("https://api.discogs.com/releases/{id}")).header("Authorization", &auth_header).send()
+        urls["release"] = json!(format!("https://discogs.com/release/{id}"));
+        
+        if let Some(auth) = &auth_header
+            && let Ok(resp) = client.get(format!("https://api.discogs.com/releases/{id}")).header("Authorization", auth).send()
             && let Ok(rel_data) = resp.json::<Value>()
         {
-            if let Some(m_id) = rel_data.get("master_id").and_then(|id| id.as_i64())
-                && let Ok(m_resp) = client.get(format!("https://api.discogs.com/masters/{m_id}")).header("Authorization", &auth_header).send()
-                && let Ok(m_data) = m_resp.json::<Value>()
-            {
-                return json!({ "release": rel_data, "master": m_data });
+            result["release"] = rel_data.clone();
+            if let Some(m_id) = rel_data.get("master_id").and_then(|id| id.as_i64()) {
+                urls["master"] = json!(format!("https://discogs.com/master/{m_id}"));
+                if let Ok(m_resp) = client.get(format!("https://api.discogs.com/masters/{m_id}")).header("Authorization", auth).send()
+                    && let Ok(m_data) = m_resp.json::<Value>()
+                {
+                    result["master"] = m_data;
+                }
             }
-            return json!({ "release": rel_data });
         }
     } else if let Some(caps) = mas_re.captures(&discogs_url) {
         let id = caps.get(1).unwrap().as_str();
-        if let Ok(resp) = client.get(format!("https://api.discogs.com/masters/{id}")).header("Authorization", &auth_header).send()
+        urls["master"] = json!(format!("https://discogs.com/master/{id}"));
+
+        if let Some(auth) = &auth_header
+            && let Ok(resp) = client.get(format!("https://api.discogs.com/masters/{id}")).header("Authorization", auth).send()
             && let Ok(m_data) = resp.json::<Value>()
         {
-            return json!({ "master": m_data });
+            result["master"] = m_data;
         }
     }
 
-    json!({})
+    result["urls"] = urls;
+    result
 }

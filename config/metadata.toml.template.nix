@@ -18,19 +18,31 @@ let
 
   renderAlbum = 
     "[album]\n" +
-    "albumartist = ${toTomlVal (get "album.metadata.albumartist" "")}\n" +
-    "album = ${toTomlVal (get "album.metadata.album" "")}\n" +
+    "\n" +
+    "albumartist  =  ${toTomlVal (get "album.metadata.albumartist" "")}\n" +
+    "album        =  ${toTomlVal (get "album.metadata.album" "")}\n" +
     "date = ${toTomlVal (get "album.metadata.date" "")}\n" +
+    "\n" +
     "genre = ${toTomlVal (get "album.metadata.genre" [])}\n" +
     "styles = ${toTomlVal (get "album.metadata.styles" [])}\n" +
+    "\n" +
     "original_date = ${toTomlVal (get "album.metadata.original_date" "")}\n" +
+    "\n" +
     "country = ${toTomlVal (get "album.metadata.country" "")}\n" +
     "label = ${toTomlVal (get "album.metadata.label" "")}\n" +
     "catalognumber = ${toTomlVal (get "album.metadata.catalognumber" "")}\n" +
     "release_date = ${toTomlVal (get "album.metadata.release_date" "")}\n" +
+    "\n" +
+    "discogs_release_url = ${toTomlVal (get "album.url.discogs_release" "")}\n" +
+    "musicbrainz_release_url = ${toTomlVal (get "album.url.musicbrainz_release" "")}\n" +
+    "ctdbtocid_url = ${toTomlVal (get "album.url.ctdbtocid" "")}\n" +
+    "\n" +
+    "discogs_master_url = ${toTomlVal (get "album.url.discogs_master" "")}\n" +
+    "musicbrainz_release_group_url = ${toTomlVal (get "album.url.musicbrainz_release_group" "")}\n" +
+    "\n" +
     "musicbrainz_albumid = ${toTomlVal (get "album.mbid.musicbrainz_albumid" "")}\n" +
-    "musicbrainz_albumartistid = ${toTomlVal (get "album.mbid.musicbrainz_albumartistid" "")}\n" +
-    "musicbrainz_releasegroupid = ${toTomlVal (get "album.mbid.musicbrainz_releasegroupid" "")}\n";
+    "musicbrainz_releasegroupid = ${toTomlVal (get "album.mbid.musicbrainz_releasegroupid" "")}\n" +
+    "musicbrainz_albumartistid = ${toTomlVal (get "album.mbid.musicbrainz_albumartistid" "")}\n";
 
   renderTrack = t:
     "[[tracks]]\n" +
