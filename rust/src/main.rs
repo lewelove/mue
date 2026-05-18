@@ -45,7 +45,12 @@ enum Commands {
         #[arg(default_value = ".")]
         path: String,
     },
-    Discid,
+    Discid {
+        #[arg(long)]
+        source: Option<String>,
+        #[arg(long)]
+        tracks: Option<String>,
+    },
 }
 
 fn main() -> Result<()> {
@@ -82,8 +87,8 @@ fn main() -> Result<()> {
                 std::process::exit(1);
             }
         }
-        Commands::Discid => {
-            discid::run();
+        Commands::Discid { source, tracks } => {
+            discid::run(source.as_deref(), tracks.as_deref());
         }
     }
 

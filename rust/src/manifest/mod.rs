@@ -58,18 +58,7 @@ pub fn run(path_str: &str, tracks_filter: &str, torrent_path: Option<&str>, meta
         }
     }
 
-    let mut builder = globset::GlobSetBuilder::new();
-    for part in tracks_filter.split(',') {
-        let trimmed = part.trim();
-        if trimmed.is_empty() { continue; }
-        let pattern = if !trimmed.contains('/') && !trimmed.contains('*') && !trimmed.contains('?') {
-            format!("**/*.{}", trimmed.trim_start_matches('.'))
-        } else {
-            trimmed.to_string()
-        };
-        builder.add(globset::Glob::new(&pattern)?);
-    }
-    let globset = builder.build()?;
+    let globset = crate::utils::build_globset(tracks_filter)?;
 
     let mut valid_paths = Vec::new();
     if let Some(files) = &torrent.files {

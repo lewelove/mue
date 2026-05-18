@@ -7,6 +7,121 @@ use sha1::{Digest, Sha1};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use std::fmt::Write;
 
+pub struct SourceResolution {
+    pub origin_path: String,
+    pub is_in_store: bool,
+    pub link_name: String,
+    pub internal_name: String,
+    pub sanitized_name: String,
+    pub truncated_hash: String,
+    pub album_name: String,
+}
+
+pub fn build_globset(tracks_filter: &str) -> Result<globset::GlobSet> {
+    let mut builder = globset::GlobSetBuilder::new();
+    for part in tracks_filter.split(',') {
+        let trimmed = part.trim();
+        if trimmed.is_empty() { continue; }
+        let pattern = if !trimmed.contains('/') && !trimmed.contains('*') && !trimmed.contains('?') {
+            format!("**/*.{}", trimmed.trim_start_matches('.'))
+        } else {
+            trimmed.to_string()
+        };
+        builder.add(globset::Glob::new(&pattern)?);
+    }
+    Ok(builder.build()?)
+}
+
+pub fn resolve_source_origin(
+    target_path: &Path,
+    source_type: Option<&str>,
+    store_path: &Path,
+    origin_base_path: &Path,
+) -> Result<SourceResolution> {
+    let album_name = eval_nix_field(target_path, "name", None, Some(store_path)).unwrap_or_default();
+    
+    let mut source_name_attr = String::new();
+    let mut source_hash = String::new();
+    let mut detected_torrent_name = String::new();
+    
+    if let Some(st) = source_type {
+        source_name_attr = eval_nix_field(target_path, &format!("source.{st}.name"), None, Some(store_path)).unwrap_or_default();
+        source_hash = eval_nix_field(target_path, &format!("source.{st}.hash"), None, Some(store_path)).unwrap_or_default();
+        
+        if st == "torrent" && source_name_attr.is_empty() {
+            let torrent_file_raw = eval_nix_field(target_path, "source.torrent.file", None, Some(store_path)).unwrap_or_default();
+            if !torrent_file_raw.is_empty() && torrent_file_raw != "null" {
+                let torrent_path = if torrent_file_raw.starts_with("./") {
+                    target_path.parent().unwrap_or(Path::new(".")).join(torrent_file_raw.trim_start_matches("./"))
+                } else {
+                    PathBuf::from(&torrent_file_raw)
+                };
+                if torrent_path.exists()
+                    && let Ok(torrent) = lava_torrent::torrent::v1::Torrent::read_from_file(&torrent_path)
+                {
+                    detected_torrent_name = torrent.name;
+                }
+            }
+        }
+    }
+
+    let internal_name = if !source_name_attr.is_empty() {
+        source_name_attr
+    } else if !detected_torrent_name.is_empty() {
+        detected_torrent_name
+    } else {
+        album_name.clone()
+    };
+
+    log::debug!("Resolved internal source name: {}", internal_name);
+
+    let truncated = get_nix32_truncate(&source_hash, Some(store_path));
+    let sanitized = sanitize_source_name(&internal_name);
+    let link_name = format!("{sanitized}-{truncated}");
+
+    let gc_roots_source = store_path.join("gcroots").join("source");
+    let source_link = gc_roots_source.join(&link_name);
+    
+    let mut is_in_store = false;
+    let mut store_origin_path = String::new();
+
+    if fs::symlink_metadata(&source_link).is_ok()
+        && let Ok(logical_target) = fs::read_link(&source_link)
+    {
+        let logical_str = logical_target.to_string_lossy().to_string();
+        if logical_str.starts_with("/nix/store/") {
+            let physical_target = store_path.join(logical_str.trim_start_matches('/'));
+            if physical_target.exists() {
+                is_in_store = true;
+                store_origin_path = physical_target.to_string_lossy().to_string();
+            }
+        }
+    }
+
+    let actual_origin_path = if is_in_store {
+        store_origin_path
+    } else if source_type == Some("torrent") {
+        origin_base_path.join("torrent").join(&link_name).to_string_lossy().to_string()
+    } else {
+        let origin_path_nix = eval_nix_field(target_path, "origin.path", None, Some(store_path)).unwrap_or_default();
+        if !origin_path_nix.is_empty() {
+            PathBuf::from(origin_path_nix).to_string_lossy().to_string()
+        } else {
+            origin_base_path.join(&album_name).to_string_lossy().to_string()
+        }
+    };
+
+    Ok(SourceResolution {
+        origin_path: actual_origin_path,
+        is_in_store,
+        link_name,
+        internal_name,
+        sanitized_name: sanitized,
+        truncated_hash: truncated,
+        album_name,
+    })
+}
+
 pub fn get_file_hash(path: &Path, store: Option<&Path>) -> Result<String> {
     log::debug!("Calculating file hash for: {}", path.display());
     let mut cmd = Command::new("nix");
@@ -216,16 +331,52 @@ pub fn get_sort_key(filepath: &Path) -> (u8, u32, String) {
     (1, 0, filename)
 }
 
-pub fn resolve_ctdbtocid(folder_path: &Path) -> Option<String> {
-    let mut files: Vec<PathBuf> = fs::read_dir(folder_path)
+pub fn resolve_ctdbtocid(folder_path: &Path, tracks_filter: Option<&str>) -> Option<String> {
+    log::debug!("Scanning directory for FLAC files: {}", folder_path.display());
+    if !folder_path.exists() {
+        log::error!("Source directory does not exist: {}", folder_path.display());
+        return None;
+    }
+
+    let globset = tracks_filter.and_then(|f| build_globset(f).ok());
+
+    let all_flacs: Vec<PathBuf> = walkdir::WalkDir::new(folder_path)
         .into_iter()
-        .flatten()
         .filter_map(std::result::Result::ok)
-        .map(|entry| entry.path())
-        .filter(|p| p.extension().and_then(|s| s.to_str()) == Some("flac"))
+        .map(|entry| entry.path().to_path_buf())
+        .filter(|p| p.is_file() && p.extension().and_then(|s| s.to_str()) == Some("flac"))
         .collect();
 
+    log::debug!("Found {} total FLAC files in the directory tree.", all_flacs.len());
+
+    let mut files: Vec<PathBuf> = all_flacs.into_iter()
+        .filter(|p| {
+            if let Some(gs) = &globset {
+                if let Ok(rel) = p.strip_prefix(folder_path) {
+                    if gs.is_match(rel) {
+                        return true;
+                    }
+                    let mut components = rel.components();
+                    if components.next().is_some() {
+                        let sub = components.as_path();
+                        if !sub.as_os_str().is_empty() && gs.is_match(sub) {
+                            return true;
+                        }
+                    }
+                    false
+                } else {
+                    gs.is_match(p)
+                }
+            } else {
+                true
+            }
+        })
+        .collect();
+
+    log::debug!("{} FLAC files matched the tracks filter.", files.len());
+
     if files.is_empty() {
+        log::error!("No FLAC files available to generate CTDB TOCID.");
         return None;
     }
 

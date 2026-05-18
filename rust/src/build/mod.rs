@@ -1,7 +1,6 @@
 use anyhow::Result;
-use crate::utils::{eval_nix_field, eval_nix_derivation_field, eval_config_field, resolve_album_path, expand_path, get_nix32_truncate, sanitize_source_name, ground_logical_path};
+use crate::utils::{eval_nix_field, eval_nix_derivation_field, eval_config_field, resolve_album_path, expand_path, ground_logical_path};
 use crate::config::AppConfig;
-use lava_torrent::torrent::v1::Torrent;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -42,13 +41,10 @@ pub fn run(path: &str, source_type: Option<&str>) -> Result<()> {
     let target_path = resolve_album_path(path)?;
     let target_dir = target_path.parent().unwrap();
 
-    let mut detected_torrent_name = String::new();
-    let mut torrent_hash = String::new();
-
     if source_type == Some("torrent") {
         log::debug!("Source type is torrent, initiating pre-verify sequence");
         let torrent_file_raw = eval_nix_field(&target_path, "source.torrent.file", None, Some(&store_path))?;
-        torrent_hash = eval_nix_field(&target_path, "source.torrent.hash", None, Some(&store_path))?;
+        let torrent_hash = eval_nix_field(&target_path, "source.torrent.hash", None, Some(&store_path))?;
         
         if !torrent_file_raw.is_empty() {
             let torrent_path = if torrent_file_raw.starts_with("./") {
@@ -61,13 +57,6 @@ pub fn run(path: &str, source_type: Option<&str>) -> Result<()> {
             if torrent_path.exists() {
                 let actual_torrent_hash = crate::utils::get_file_hash(&torrent_path, Some(&store_path))?;
                 crate::utils::check_hash(&actual_torrent_hash, &torrent_hash, "source.torrent.hash")?;
-                
-                log::debug!("Parsing torrent metadata via lava_torrent");
-                let torrent = Torrent::read_from_file(&torrent_path)
-                    .map_err(|e| anyhow::anyhow!("Failed to parse torrent file: {}", e))?;
-                
-                detected_torrent_name = torrent.name;
-                log::debug!("Detected torrent name: {}", detected_torrent_name);
             }
         }
     }
@@ -76,68 +65,21 @@ pub fn run(path: &str, source_type: Option<&str>) -> Result<()> {
     let origin_base = origin_base_path.to_string_lossy().to_string();
     log::debug!("Mapping MUNIX_ORIGIN_PATH: {}", origin_base);
 
-    let album_name = eval_nix_field(&target_path, "name", None, Some(&store_path))?;
-    let mut source_name_attr = String::new();
-    if let Some(st) = source_type {
-        source_name_attr = eval_nix_field(&target_path, &format!("source.{}.name", st), None, Some(&store_path))?;
-    }
-
-    let internal_torrent_name = if !source_name_attr.is_empty() {
-        source_name_attr
-    } else if !detected_torrent_name.is_empty() {
-        detected_torrent_name
-    } else {
-        album_name.clone()
-    };
-
-    let truncated = get_nix32_truncate(&torrent_hash, Some(&store_path));
-    let sanitized = sanitize_source_name(&internal_torrent_name);
-    let link_name = format!("{sanitized}-{truncated}");
-
-    let gc_roots_source = store_path.join("gcroots").join("source");
-    let source_link = gc_roots_source.join(&link_name);
-    
-    let mut is_source_in_store = false;
-    let mut store_origin_path = String::new();
-
-    if fs::symlink_metadata(&source_link).is_ok()
-        && let Ok(logical_target) = fs::read_link(&source_link)
-    {
-        let logical_str = logical_target.to_string_lossy().to_string();
-        if logical_str.starts_with("/nix/store/") {
-            let physical_target = store_path.join(logical_str.trim_start_matches('/'));
-            if physical_target.exists() {
-                is_source_in_store = true;
-                store_origin_path = physical_target.to_string_lossy().to_string();
-            }
-        }
-    }
+    let res = crate::utils::resolve_source_origin(
+        &target_path,
+        source_type,
+        &store_path,
+        &origin_base_path,
+    )?;
 
     let mut envs = HashMap::new();
-    let actual_origin_path_str = if is_source_in_store {
-        log::debug!("Resolved origin path via GC root (physical): {}", store_origin_path);
-        store_origin_path
-    } else if source_type == Some("torrent") {
-        let p = origin_base_path.join("torrent").join(&link_name);
-        log::debug!("Resolved origin path via base + torrent/ + link_name: {}", p.display());
-        p.to_string_lossy().to_string()
-    } else {
-        let origin_path_nix = eval_nix_field(&target_path, "origin.path", None, Some(&store_path))?;
-        if !origin_path_nix.is_empty() {
-            log::debug!("Using explicit origin.path: {}", origin_path_nix);
-            PathBuf::from(origin_path_nix).to_string_lossy().to_string()
-        } else {
-            origin_base_path.join(&album_name).to_string_lossy().to_string()
-        }
-    };
-
-    envs.insert("MUNIX_ORIGIN_PATH".to_string(), actual_origin_path_str.clone());
-    log::debug!("Mapping MUNIX_SOURCE_NAME: {}", internal_torrent_name);
-    envs.insert("MUNIX_SOURCE_NAME".to_string(), internal_torrent_name);
-    envs.insert("MUNIX_SANITIZED_SOURCE_NAME".to_string(), sanitized.clone());
+    envs.insert("MUNIX_ORIGIN_PATH".to_string(), res.origin_path.clone());
+    log::debug!("Mapping MUNIX_SOURCE_NAME: {}", res.internal_name);
+    envs.insert("MUNIX_SOURCE_NAME".to_string(), res.internal_name.clone());
+    envs.insert("MUNIX_SANITIZED_SOURCE_NAME".to_string(), res.sanitized_name.clone());
 
     if source_type == Some("torrent") {
-        if is_source_in_store {
+        if res.is_in_store {
             log::info!("Found pinned source in store. Skipping verification...");
         } else {
             let verify_cmd_raw = eval_config_field(&target_path, "commands.torrent.verify", Some(&envs), Some(&store_path))?;
@@ -151,7 +93,7 @@ pub fn run(path: &str, source_type: Option<&str>) -> Result<()> {
                 }
             }
 
-            let physical_origin = PathBuf::from(&actual_origin_path_str);
+            let physical_origin = PathBuf::from(&res.origin_path);
             if physical_origin.exists() {
                 let actual_origin_hash = crate::utils::get_path_hash(&physical_origin, Some(&store_path))?;
                 let origin_hash = eval_nix_field(&target_path, "origin.hash", None, Some(&store_path))?;
@@ -181,7 +123,7 @@ pub fn run(path: &str, source_type: Option<&str>) -> Result<()> {
     }
 
     let expr = format!("(import ./album.nix {{ munix = (builtins.getFlake \"{}\").lib; }})", crate::utils::get_munix_flake_uri());
-    let result_link = store_path.join("gcroots").join("albums").join(format!("{}-{}", album_name, truncated));
+    let result_link = store_path.join("gcroots").join("albums").join(format!("{}-{}", res.album_name, res.truncated_hash));
     fs::create_dir_all(result_link.parent().unwrap())?;
 
     log::info!("Building package via Nix...");
@@ -217,7 +159,7 @@ pub fn run(path: &str, source_type: Option<&str>) -> Result<()> {
         log::info!("Pinning source logical GC root...");
         let gc_roots_source = store_path.join("gcroots").join("source");
         fs::create_dir_all(&gc_roots_source)?;
-        let source_link = gc_roots_source.join(&link_name);
+        let source_link = gc_roots_source.join(&res.link_name);
 
         if source_link.exists() || source_link.symlink_metadata().is_ok() {
             let _ = fs::remove_file(&source_link);

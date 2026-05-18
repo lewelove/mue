@@ -1,5 +1,5 @@
 use anyhow::Result;
-use crate::utils::{eval_config_field, eval_nix_field, resolve_album_path, ground_logical_path};
+use crate::utils::{eval_config_field, resolve_album_path, ground_logical_path, expand_path};
 use crate::config::AppConfig;
 use std::collections::HashMap;
 use std::process::Command;
@@ -12,42 +12,25 @@ pub fn run(source: &str, path: &str) -> Result<()> {
     let config = AppConfig::load();
     let store_path = config.get_store_path();
     let album_path = resolve_album_path(path)?;
+    let origin_base_path = expand_path(config.origin.as_deref().unwrap_or("."));
 
-    if source == "torrent" {
-        let torrent_hash = eval_nix_field(&album_path, "source.torrent.hash", None, Some(&store_path))?;
-        let source_name = eval_nix_field(&album_path, "source.torrent.name", None, Some(&store_path))?;
-        let truncated = crate::utils::get_nix32_truncate(&torrent_hash, Some(&store_path));
-        let sanitized = crate::utils::sanitize_source_name(&source_name);
-        let link_name = format!("{sanitized}-{truncated}");
-        
-        let source_link = store_path.join("gcroots").join("source").join(&link_name);
-        if source_link.exists() {
-            log::info!("Source is already pinned logically in the Nix store. Skipping fetch.");
-            return Ok(());
-        }
+    let res = crate::utils::resolve_source_origin(
+        &album_path,
+        Some(source),
+        &store_path,
+        &origin_base_path,
+    )?;
+
+    if source == "torrent" && res.is_in_store {
+        log::info!("Source is already pinned logically in the Nix store. Skipping fetch.");
+        return Ok(());
     }
 
     let mut envs = HashMap::new();
-
-    if let Some(config_origin) = &config.origin {
-        let expanded = crate::utils::expand_path(config_origin).to_string_lossy().to_string();
-        log::debug!("Using origin path from config: {}", expanded);
-        envs.insert("MUNIX_ORIGIN_PATH".to_string(), expanded);
-    }
-
-    let mut fallback_name = eval_nix_field(&album_path, "name", None, Some(&store_path)).unwrap_or_default();
-    if source == "torrent" {
-        let t_name = eval_nix_field(&album_path, "source.torrent.name", None, Some(&store_path))?;
-        if !t_name.is_empty() {
-            fallback_name = t_name;
-        }
-    }
-    
-    log::debug!("Using fallback source name: {}", fallback_name);
-    envs.insert("MUNIX_SOURCE_NAME".to_string(), fallback_name.clone());
-    
-    let sanitized = crate::utils::sanitize_source_name(&fallback_name);
-    envs.insert("MUNIX_SANITIZED_SOURCE_NAME".to_string(), sanitized);
+    log::debug!("Using origin path: {}", res.origin_path);
+    envs.insert("MUNIX_ORIGIN_PATH".to_string(), res.origin_path);
+    envs.insert("MUNIX_SOURCE_NAME".to_string(), res.internal_name);
+    envs.insert("MUNIX_SANITIZED_SOURCE_NAME".to_string(), res.sanitized_name);
 
     let cmd_field = match source {
         "torrent" => "commands.torrent.fetch",
