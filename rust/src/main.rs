@@ -26,10 +26,14 @@ enum Commands {
         source: Option<String>,
     },
     Manifest {
+        #[arg(long)]
+        torrent: Option<String>,
         #[arg(default_value = ".")]
         path: String,
         #[arg(long, default_value = "flac,mp3,wav")]
         tracks: String,
+        #[arg(long)]
+        metadata: Option<String>,
     },
     Fetch {
         #[arg(long)]
@@ -61,8 +65,8 @@ fn main() -> Result<()> {
                 std::process::exit(1);
             }
         }
-        Commands::Manifest { path, tracks } => {
-            if let Err(e) = manifest::run(&path, &tracks) {
+        Commands::Manifest { torrent, path, tracks, metadata } => {
+            if let Err(e) = manifest::run(&path, &tracks, torrent.as_deref(), metadata.as_deref()) {
                 log::error!("{}", e);
                 std::process::exit(1);
             }

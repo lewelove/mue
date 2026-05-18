@@ -108,6 +108,31 @@ pub fn eval_nix_field(path: &Path, field_path: &str, envs: Option<&HashMap<Strin
     Ok(result)
 }
 
+pub fn eval_nix_derivation_field(path: &Path, field_path: &str, envs: Option<&HashMap<String, String>>, store: Option<&Path>) -> Result<String> {
+    let path_str = path.to_string_lossy();
+    let flake_uri = get_munix_flake_uri();
+    let expr = format!(
+        "(import (/. + \"{path_str}\") {{ munix = (builtins.getFlake \"{flake_uri}\").lib; }}).{field_path}"
+    );
+    log::debug!("Evaluating real derivation field '{}' from {}", field_path, path.display());
+    let mut cmd = Command::new("nix");
+    if let Some(s) = store {
+        cmd.args(["--store", s.to_str().unwrap()]);
+    }
+    if let Some(e) = envs {
+        cmd.envs(e);
+    }
+    cmd.args(["eval", "--raw", "--impure", "--expr", &expr]);
+    let output = cmd.output().context("Failed to execute nix eval for derivation")?;
+    if !output.status.success() {
+        let err = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("{}", err);
+    }
+    let result = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    log::debug!("Evaluated derivation field '{}': {}", field_path, result);
+    Ok(result)
+}
+
 pub fn eval_config_field(path: &Path, field_path: &str, envs: Option<&HashMap<String, String>>, store: Option<&Path>) -> Result<String> {
     let flake_uri = get_munix_flake_uri();
     let path_str = path.to_string_lossy();

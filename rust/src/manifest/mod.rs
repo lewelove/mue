@@ -1,176 +1,180 @@
 use anyhow::Result;
-use globset::{Glob, GlobSetBuilder};
-use std::fmt::Write;
+use lava_torrent::torrent::v1::Torrent;
 use std::path::{Path, PathBuf};
-use walkdir::WalkDir;
-use crate::config::AppConfig;
+use std::fmt::Write;
+use toml::Value;
 
-fn build_globset(tracks_filter: &str) -> Result<globset::GlobSet> {
-    log::debug!("Building globset with filter: {}", tracks_filter);
+pub fn run(path_str: &str, tracks_filter: &str, torrent_path: Option<&str>, metadata_path: Option<&str>) -> Result<()> {
+    let target_dir = Path::new(path_str).canonicalize().unwrap_or_else(|_| PathBuf::from(path_str));
     
-    let mut builder = GlobSetBuilder::new();
+    let t_path = if let Some(t) = torrent_path {
+        Path::new(t).to_path_buf()
+    } else {
+        let mut found = None;
+        if target_dir.is_dir() && let Ok(entries) = std::fs::read_dir(&target_dir) {
+            for entry in entries.filter_map(Result::ok) {
+                if entry.path().extension().and_then(|s| s.to_str()) == Some("torrent") {
+                    found = Some(entry.path());
+                    break;
+                }
+            }
+        }
+        found.unwrap_or_else(|| PathBuf::from("."))
+    };
+
+    if !t_path.exists() {
+        anyhow::bail!("Torrent file not found");
+    }
+
+    let torrent_hash = crate::utils::get_file_hash(&t_path, None).unwrap_or_default();
+    let torrent = Torrent::read_from_file(&t_path).map_err(|_| anyhow::anyhow!("Torrent parse error"))?;
+
+    let mut builder = globset::GlobSetBuilder::new();
     for part in tracks_filter.split(',') {
         let trimmed = part.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
+        if trimmed.is_empty() { continue; }
         let pattern = if !trimmed.contains('/') && !trimmed.contains('*') && !trimmed.contains('?') {
             format!("**/*.{}", trimmed.trim_start_matches('.'))
         } else {
             trimmed.to_string()
         };
-        
-        log::debug!("Adding pattern to globset: {}", pattern);
-        
-        builder.add(Glob::new(&pattern)?);
+        builder.add(globset::Glob::new(&pattern)?);
     }
-    Ok(builder.build()?)
-}
+    let globset = builder.build()?;
 
-pub fn run(path: &str, tracks_filter: &str) -> Result<()> {
-    log::debug!("Starting manifest generation");
-    log::debug!("Target path: {}", path);
+    let mut valid_paths = Vec::new();
+    if let Some(files) = &torrent.files {
+        for f in files {
+            if globset.is_match(f.path.to_string_lossy().as_ref()) {
+                valid_paths.push(f.path.clone());
+            }
+        }
+    }
+    valid_paths.sort_by(|a, b| alphanumeric_sort::compare_path(a, b));
 
-    let config = AppConfig::load();
-    let store_path = config.get_store_path();
+    let mut merged_meta = Value::Table(toml::map::Map::new());
+    if let Some(m_path) = metadata_path && let p = Path::new(m_path) && p.exists() {
+        let content = std::fs::read_to_string(p)?;
+        let parsed: Value = toml::from_str(&content)?;
+        deep_merge(&mut merged_meta, parsed);
+    }
 
-    let target_path = Path::new(path).canonicalize().unwrap_or_else(|_| PathBuf::from(path));
-    let dir = if target_path.is_file() {
-        target_path.parent().unwrap().to_path_buf()
+    let album_data = merged_meta.get("album");
+    let artist = album_data.and_then(|a| a.get("albumartist")).and_then(Value::as_str).unwrap_or("");
+    let album = album_data.and_then(|a| a.get("album")).and_then(Value::as_str).unwrap_or(&torrent.name);
+    
+    let pname_base = if artist.is_empty() {
+        album.to_lowercase()
     } else {
-        target_path
+        format!("{}-{}", artist.to_lowercase(), album.to_lowercase())
     };
-
-    log::debug!("Resolved directory to scan: {}", dir.display());
-
-    let globset = build_globset(tracks_filter)?;
-    let mut files = Vec::new();
-
-    for entry in WalkDir::new(&dir).max_depth(3).into_iter().filter_map(Result::ok) {
-        if entry.file_type().is_file()
-            && let Some(ext) = entry.path().extension().and_then(|e| e.to_str())
-            && (ext.eq_ignore_ascii_case("flac") || ext.eq_ignore_ascii_case("mp3") || ext.eq_ignore_ascii_case("wav"))
-        {
-            let rel_path = entry.path().strip_prefix(&dir).unwrap_or(entry.path());
-            let path_str = rel_path.to_string_lossy();
-            if globset.is_match(path_str.as_ref()) {
-                log::debug!("Matched track file: {}", path_str);
-                files.push(entry.path().to_path_buf());
-            }
-        }
-    }
     
-    files.sort_by(|a, b| alphanumeric_sort::compare_path(a, b));
-
-    let mut cover_file = "./cover.png".to_string();
-    let mut cover_hash = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string();
-
-    if dir.join("cover.png").exists() {
-        log::debug!("Found cover.png");
-        if let Ok(h) = crate::utils::get_file_hash(&dir.join("cover.png"), Some(&store_path)) {
-            cover_hash = h;
-        }
-    } else if dir.join("cover.jpg").exists() {
-        log::debug!("Found cover.jpg");
-        cover_file = "./cover.jpg".to_string();
-        if let Ok(h) = crate::utils::get_file_hash(&dir.join("cover.jpg"), Some(&store_path)) {
-            cover_hash = h;
-        }
-    } else {
-        log::debug!("No cover image found. Using placeholders.");
-    }
-
-    let mut torrent_file = "./Info/source.torrent".to_string();
-    let mut torrent_hash = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string();
-
-    let mut torrent_found = false;
-    if let Ok(entries) = std::fs::read_dir(dir.join("Info")) {
-        for entry in entries.filter_map(Result::ok) {
-            let p = entry.path();
-            if p.extension().and_then(|s| s.to_str()) == Some("torrent") {
-                torrent_file = format!("./Info/{}", p.file_name().unwrap().to_string_lossy());
-                log::debug!("Found torrent file at: {}", torrent_file);
-                if let Ok(h) = crate::utils::get_file_hash(&p, Some(&store_path)) {
-                    torrent_hash = h;
-                }
-                torrent_found = true;
-                break;
-            }
-        }
-    }
-    
-    if !torrent_found
-        && let Ok(entries) = std::fs::read_dir(&dir) {
-            for entry in entries.filter_map(Result::ok) {
-                let p = entry.path();
-                if p.extension().and_then(|s| s.to_str()) == Some("torrent") {
-                    torrent_file = format!("./{}", p.file_name().unwrap().to_string_lossy());
-                    log::debug!("Found torrent file at: {}", torrent_file);
-                    if let Ok(h) = crate::utils::get_file_hash(&p, Some(&store_path)) {
-                        torrent_hash = h;
-                    }
-                    break;
-                }
-            }
-        }
-
-    log::debug!("Generating manifest output");
+    let sanitized_pname = pname_base.chars().map(|c| if c.is_alphanumeric() { c } else { '-' }).collect::<String>().split('-').filter(|s| !s.is_empty()).collect::<Vec<_>>().join("-");
 
     let mut out = String::new();
     let _ = writeln!(out, "{{ munix }}:");
     let _ = writeln!(out, "munix.mkAlbum {{");
-    let _ = writeln!(out, "  name = \"\";");
-    let _ = writeln!(out, "  origin = {{");
-    let _ = writeln!(out, "    path = \"\";");
-    let _ = writeln!(out, "    hash = \"sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\";");
-    let _ = writeln!(out, "  }};");
+    let _ = writeln!(out, "  name = \"{sanitized_pname}\";");
     let _ = writeln!(out, "  source.torrent = {{");
-    let _ = writeln!(out, "    file = {torrent_file};");
+    let _ = writeln!(out, "    file = ./{};", t_path.file_name().unwrap_or_default().to_string_lossy());
     let _ = writeln!(out, "    name = \"\";");
     let _ = writeln!(out, "    hash = \"{torrent_hash}\";");
     let _ = writeln!(out, "  }};");
-    let _ = writeln!(out, "  source.web = {{");
-    let _ = writeln!(out, "    url = \"\";");
-    let _ = writeln!(out, "    hash = \"sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\";");
-    let _ = writeln!(out, "  }};");
+    let _ = writeln!(out, "  origin.hash = \"sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\";");
     let _ = writeln!(out, "  cover = {{");
-    let _ = writeln!(out, "    file = {cover_file};");
-    let _ = writeln!(out, "    hash = \"{cover_hash}\";");
+    let _ = writeln!(out, "    file = ./cover.png;");
+    let _ = writeln!(out, "    hash = \"sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\";");
     let _ = writeln!(out, "  }};");
     let _ = writeln!(out, "  album = {{");
     let _ = writeln!(out, "    metadata = {{");
-    let _ = writeln!(out, "    }};");
-    let _ = writeln!(out, "    mbid = {{");
+    if let Some(data) = album_data {
+        let _ = write!(out, "{}", to_nix_attributes(data, "      "));
+    }
     let _ = writeln!(out, "    }};");
     let _ = writeln!(out, "  }};");
-
     let _ = writeln!(out, "  tracks = [");
-    
-    if files.is_empty() {
+
+    let meta_tracks = merged_meta.get("tracks").and_then(Value::as_array);
+    let meta_tracks_len = meta_tracks.map_or(0, Vec::len);
+    let total_count = std::cmp::max(valid_paths.len(), meta_tracks_len);
+
+    for i in 0..total_count {
+        let file_path = valid_paths.get(i).map_or_else(String::new, |path_buf| {
+            if torrent.files.is_some() {
+                format!("{}/{}", torrent.name, path_buf.to_string_lossy())
+            } else {
+                path_buf.to_string_lossy().to_string()
+            }
+        });
+
+        let track_meta = if let Some(arr) = meta_tracks && i < arr.len() {
+            arr[i].clone()
+        } else {
+            Value::Table(toml::map::Map::new())
+        };
+
         let _ = writeln!(out, "    {{");
-        let _ = writeln!(out, "      file = \"\";");
+        let _ = writeln!(out, "      file = \"{file_path}\";");
         let _ = writeln!(out, "      metadata = {{");
-        let _ = writeln!(out, "      }};");
-        let _ = writeln!(out, "      mbid = {{");
+        let _ = write!(out, "{}", to_nix_attributes(&track_meta, "        "));
         let _ = writeln!(out, "      }};");
         let _ = writeln!(out, "    }}");
-    } else {
-        for f in &files {
-            let rel = f.strip_prefix(&dir).unwrap_or(f).to_string_lossy();
-            let _ = writeln!(out, "    {{");
-            let _ = writeln!(out, "      file = \"{rel}\";");
-            let _ = writeln!(out, "      metadata = {{");
-            let _ = writeln!(out, "      }};");
-            let _ = writeln!(out, "      mbid = {{");
-            let _ = writeln!(out, "      }};");
-            let _ = writeln!(out, "    }}");
-        }
     }
 
     let _ = writeln!(out, "  ];");
     let _ = writeln!(out, "}}");
-
+    
     println!("{out}");
-
     Ok(())
+}
+
+fn to_nix_attributes(val: &Value, indent: &str) -> String {
+    let mut res = String::new();
+    if let Some(tab) = val.as_table() {
+        for (k, v) in tab {
+            let _ = writeln!(res, "{indent}{k} = {};", to_nix_value(v));
+        }
+    }
+    res
+}
+
+fn to_nix_value(val: &Value) -> String {
+    match val {
+        Value::String(s) => format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\"")),
+        Value::Integer(i) => i.to_string(),
+        Value::Float(f) => f.to_string(),
+        Value::Boolean(b) => b.to_string(),
+        Value::Array(arr) => {
+            let items: Vec<String> = arr.iter().map(to_nix_value).collect();
+            format!("[ {} ]", items.join(" "))
+        }
+        _ => "\"\"".to_string(),
+    }
+}
+
+fn deep_merge(base: &mut Value, overlay: Value) {
+    match (base, overlay) {
+        (Value::Table(base_map), Value::Table(overlay_map)) => {
+            for (k, v) in overlay_map {
+                if k == "tracks" && v.is_array() && let Some(base_tracks) = base_map.get_mut("tracks") {
+                    if let (Value::Array(b_arr), Value::Array(o_arr)) = (base_tracks, v) {
+                        for (i, o_val) in o_arr.into_iter().enumerate() {
+                            if i < b_arr.len() {
+                                deep_merge(&mut b_arr[i], o_val);
+                            } else {
+                                b_arr.push(o_val);
+                            }
+                        }
+                    }
+                } else if let Some(base_v) = base_map.get_mut(&k) {
+                    deep_merge(base_v, v);
+                } else {
+                    base_map.insert(k, v);
+                }
+            }
+        }
+        (base_val, overlay_val) => {
+            *base_val = overlay_val;
+        }
+    }
 }

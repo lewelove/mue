@@ -1,5 +1,5 @@
 use anyhow::Result;
-use crate::utils::{eval_nix_field, eval_config_field, resolve_album_path, expand_path, get_nix32_truncate, sanitize_source_name};
+use crate::utils::{eval_nix_field, eval_nix_derivation_field, eval_config_field, resolve_album_path, expand_path, get_nix32_truncate, sanitize_source_name};
 use crate::config::AppConfig;
 use lava_torrent::torrent::v1::Torrent;
 use std::fs;
@@ -13,6 +13,8 @@ pub fn run(path: &str, source_type: Option<&str>) -> Result<()> {
     let config = AppConfig::load();
     let store_path = config.get_store_path();
     log::debug!("Using Nix store at: {}", store_path.display());
+
+    sync_env(&store_path)?;
 
     let target_path = resolve_album_path(path)?;
     let target_dir = target_path.parent().unwrap();
@@ -159,7 +161,52 @@ pub fn run(path: &str, source_type: Option<&str>) -> Result<()> {
     
     materialize_output(&physical_store_path, target_dir, &store_path)?;
 
+    if let Ok(src_store_path) = eval_nix_derivation_field(&target_path, "sourceStorePath", Some(&envs), Some(&store_path)) {
+        log::info!("Pinning source logical GC root...");
+        let gc_roots_source = store_path.join("gcroots").join("source");
+        fs::create_dir_all(&gc_roots_source)?;
+        let source_link = gc_roots_source.join(&link_name);
+
+        if source_link.exists() || source_link.symlink_metadata().is_ok() {
+            let _ = fs::remove_file(&source_link);
+        }
+
+        if let Err(e) = std::os::unix::fs::symlink(&src_store_path, &source_link) {
+            log::warn!("Failed to create source GC root link: {}", e);
+        }
+
+        envs.insert("MUNIX_ORIGIN_PATH".to_string(), src_store_path);
+        let seed_cmd = eval_config_field(&target_path, "commands.torrent.seed", Some(&envs), Some(&store_path)).unwrap_or_default();
+        if !seed_cmd.is_empty() {
+            log::info!("Executing seed lifecycle command");
+            let _ = Command::new("sh").envs(&envs).arg("-c").arg(&seed_cmd).status();
+        }
+    }
+
     log::info!("Build completed successfully.");
+    Ok(())
+}
+
+fn sync_env(store_path: &Path) -> Result<()> {
+    let flake_uri = crate::utils::get_munix_flake_uri();
+    let gc_roots_profiles = store_path.join("gcroots").join("profiles");
+    fs::create_dir_all(&gc_roots_profiles)?;
+    let active_env_link = gc_roots_profiles.join("env");
+
+    log::info!("Syncing toolchain environment GC root...");
+    let mut cmd = Command::new("nix");
+    cmd.arg("build")
+        .arg("--store")
+        .arg(store_path)
+        .arg("--impure")
+        .arg(format!("{flake_uri}#env"))
+        .arg("--out-link")
+        .arg(&active_env_link);
+
+    let status = cmd.status()?;
+    if !status.success() {
+        anyhow::bail!("Nix build failed for env toolchain sync");
+    }
     Ok(())
 }
 

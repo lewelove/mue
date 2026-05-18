@@ -13,6 +13,20 @@ pub fn run(source: &str, path: &str) -> Result<()> {
     let store_path = config.get_store_path();
     let album_path = resolve_album_path(path)?;
 
+    if source == "torrent" {
+        let torrent_hash = eval_nix_field(&album_path, "source.torrent.hash", None, Some(&store_path))?;
+        let source_name = eval_nix_field(&album_path, "source.torrent.name", None, Some(&store_path))?;
+        let truncated = crate::utils::get_nix32_truncate(&torrent_hash, Some(&store_path));
+        let sanitized = crate::utils::sanitize_source_name(&source_name);
+        let link_name = format!("{sanitized}-{truncated}");
+        
+        let source_link = store_path.join("gcroots").join("source").join(&link_name);
+        if source_link.exists() {
+            log::info!("Source is already pinned logically in the Nix store. Skipping fetch.");
+            return Ok(());
+        }
+    }
+
     let mut envs = HashMap::new();
 
     if let Some(config_origin) = &config.origin {
