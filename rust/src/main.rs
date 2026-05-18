@@ -6,6 +6,8 @@ mod fetch;
 mod manifest;
 mod config;
 mod utils;
+mod discid;
+mod remote;
 
 #[derive(Parser)]
 #[command(name = "munix", version = "0.1.0")]
@@ -41,6 +43,7 @@ enum Commands {
         #[arg(default_value = ".")]
         path: String,
     },
+    Discid,
 }
 
 fn main() -> Result<()> {
@@ -76,6 +79,9 @@ fn main() -> Result<()> {
                 log::error!("{}", e);
                 std::process::exit(1);
             }
+        }
+        Commands::Discid => {
+            discid::run();
         }
     }
 

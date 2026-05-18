@@ -26,6 +26,8 @@
     };
 
     lib = {
+      albumNixTemplate = { data }: import ./template.nix { inherit data; lib = pkgs.lib; };
+
       evalConfig = albumArgs: let
         envOrigin = builtins.getEnv "MUNIX_ORIGIN_PATH";
         envSourceName = builtins.getEnv "MUNIX_SOURCE_NAME";
@@ -73,24 +75,18 @@
         '';
       };
 
-      mkTrack = { name, src, relPath, metadata ? {}, cover ? null, allowedTags ? [] }: let
-        filteredMeta = if allowedTags == [] then metadata else pkgs.lib.filterAttrs (k: v: builtins.elem (pkgs.lib.toLower k) allowedTags) metadata;
-        metaJson = pkgs.writeText "meta.json" (builtins.toJSON filteredMeta);
-      in pkgs.stdenv.mkDerivation {
+      mkFlacTrack = { name, src, relPath, tags ? [], cover ? null }: pkgs.stdenv.mkDerivation {
         inherit name src relPath;
-        buildInputs = [ pkgs.flac pkgs.jq ];
+        buildInputs = [ pkgs.flac ];
         unpackPhase = "true";
         buildPhase = ''
           cp "$src/$relPath" track.flac
           chmod +w track.flac
-          metaflac --remove-all-tags track.flac
           
-          jq -r 'to_entries | .[] | if (.value | type) == "array" then .key as $k | .value[] | "\($k)=\(.)" else "\(.key)=\(.value)" end' ${metaJson} > tags.txt
-          while IFS= read -r tag; do
-            metaflac --set-tag="$tag" track.flac
-          done < tags.txt
-
-          ${if cover != null then ''metaflac --import-picture-from="${cover}/cover.png" track.flac'' else ""}
+          metaflac --remove-all-tags \
+            ${if cover != null then "--import-picture-from=\"${cover}/cover.png\"" else ""} \
+            ${pkgs.lib.concatMapStringsSep " " (t: "--set-tag=\"${pkgs.lib.escape ["\"" "\\" "$"] t}\"") tags} \
+            track.flac
         '';
         installPhase = ''
           mkdir -p $out
@@ -102,23 +98,51 @@
         name, 
         origin ? { path = ""; hash = ""; },
         source ? {},
-        album ? { metadata = {}; mbid = {}; },
+        album ? { info = {}; metadata = {}; mbid = {}; },
         tracks ? [], 
         cover ? null
       }: let
-        getMergedTrackMeta = t: (album.metadata or {}) // (album.mbid or {}) // (t.metadata or {}) // (t.mbid or {});
+        config = self.lib.evalConfig args;
 
-        trackIds = builtins.map (t: let m = getMergedTrackMeta t; in "${toString (m.discnumber or 1)}-${toString (m.tracknumber or 0)}") tracks;
+        resolvePath = data: pathStr: let
+          parts = pkgs.lib.splitString "." pathStr;
+        in pkgs.lib.foldl' (acc: attr: if builtins.isAttrs acc && acc ? ${attr} then acc.${attr} else null) data parts;
+
+        trackContexts = pkgs.lib.lists.imap1 (idx: track: let
+          dataCtx = { inherit album; tracks = track; };
+          
+          t_disc = resolvePath dataCtx "tracks.metadata.discnumber";
+          a_disc = resolvePath dataCtx "album.metadata.discnumber";
+          disc = if t_disc != null then t_disc else if a_disc != null then a_disc else 1;
+
+          t_trk = resolvePath dataCtx "tracks.metadata.tracknumber";
+          a_trk = resolvePath dataCtx "album.metadata.tracknumber";
+          trk = if t_trk != null then t_trk else if a_trk != null then a_trk else 0;
+
+          t_title = resolvePath dataCtx "tracks.metadata.title";
+          a_title = resolvePath dataCtx "album.metadata.title";
+          title = if t_title != null then t_title else if a_title != null then a_title else "Untitled";
+
+          resolvedTags = pkgs.lib.concatLists (pkgs.lib.mapAttrsToList (tag: pathStr: 
+            let 
+              val = resolvePath dataCtx pathStr;
+            in
+            if val == null || val == "" || val == [] then []
+            else if builtins.isList val then builtins.map (v: "${tag}=${toString v}") val
+            else [ "${tag}=${toString val}" ]
+          ) (config.writeFlacKeys or {}));
+
+        in { inherit track disc trk title resolvedTags; }) tracks;
+
+        maxDisc = builtins.foldl' (acc: t: pkgs.lib.max acc t.disc) 1 trackContexts;
+        maxTrack = builtins.foldl' (acc: t: pkgs.lib.max acc t.trk) 1 trackContexts;
+
+        trackIds = builtins.map (t: "${toString t.disc}-${toString t.trk}") trackContexts;
         uniqueTrackIds = pkgs.lib.unique trackIds;
         hasDuplicates = builtins.length trackIds != builtins.length uniqueTrackIds;
-
-        maxDisc = builtins.foldl' (acc: t: pkgs.lib.max acc ((getMergedTrackMeta t).discnumber or 1)) 1 tracks;
-        maxTrack = builtins.foldl' (acc: t: pkgs.lib.max acc ((getMergedTrackMeta t).tracknumber or 0)) 1 tracks;
         
         discPadLen = builtins.stringLength (toString maxDisc);
         trackPadLen = pkgs.lib.max 2 (builtins.stringLength (toString maxTrack));
-
-        config = self.lib.evalConfig args;
 
         toTomlVal = v:
           if builtins.isString v then "\"${pkgs.lib.escape ["\"" "\\"] v}\""
@@ -129,7 +153,8 @@
         
         toTomlTable = order: data: let
           orderedLines = pkgs.lib.concatMap (pathStr:
-            let
+            if pathStr == "\n" then [ "" ]
+            else let
               parts = pkgs.lib.splitString "." pathStr;
               manifest = builtins.elemAt parts 0;
               key = builtins.elemAt parts 1;
@@ -137,7 +162,17 @@
                then [ "${key} = ${toTomlVal data.${manifest}.${key}}" ]
                else []
           ) order;
-        in pkgs.lib.concatStringsSep "\n" orderedLines;
+          
+          rawLines = orderedLines;
+          cleanLines = pkgs.lib.foldl' (acc: x: 
+            if x != "" 
+            then acc ++ [x] 
+            else if (acc != [] && pkgs.lib.last acc == "") 
+            then acc 
+            else acc ++ [x]
+          ) [] rawLines;
+          tightLines = if cleanLines != [] && pkgs.lib.last cleanLines == "" then pkgs.lib.init cleanLines else cleanLines;
+        in pkgs.lib.concatStringsSep "\n" tightLines;
 
         metadataToml = let
           aTable = toTomlTable (config.keys.album or []) album;
@@ -196,25 +231,22 @@
                          )
                          else null;
         
-        builtTracks = pkgs.lib.lists.imap1 (idx: track: let
-          mergedMeta = getMergedTrackMeta track;
-          disc = mergedMeta.discnumber or 1;
-          trk = mergedMeta.tracknumber or 0;
-          title = mergedMeta.title or "Untitled";
-          discStr = pkgs.lib.fixedWidthString discPadLen "0" (toString disc);
-          trkStr = pkgs.lib.fixedWidthString trackPadLen "0" (toString trk);
-          fileName = if maxDisc == 1 then "${trkStr} - ${title}.flac" else "${discStr}.${trkStr} - ${title}.flac";
+        builtTracks = builtins.map (tc: let
+          discStr = pkgs.lib.fixedWidthString discPadLen "0" (toString tc.disc);
+          trkStr = pkgs.lib.fixedWidthString trackPadLen "0" (toString tc.trk);
+          fileName = if maxDisc == 1 then "${trkStr} - ${tc.title}.flac" else "${discStr}.${trkStr} - ${tc.title}.flac";
         in {
           inherit fileName;
-          drv = self.lib.mkTrack {
-            name = "${name}-disc${toString disc}-track${toString trk}";
+          drv = self.lib.mkFlacTrack {
+            name = "${name}-disc${toString tc.disc}-track${toString tc.trk}";
             src = realSrc;
-            relPath = track.file;
-            metadata = mergedMeta;
+            relPath = tc.track.file;
+            tags = tc.resolvedTags;
             cover = processedCover;
-            allowedTags = config.allowedTags or [];
           };
-        }) tracks;
+          disc = tc.disc;
+          trk = tc.trk;
+        }) trackContexts;
 
       in if hasDuplicates then throw "Duplicate discnumber and tracknumber combinations found in tracks." else pkgs.stdenv.mkDerivation {
         inherit name;

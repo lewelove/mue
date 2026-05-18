@@ -2,6 +2,10 @@ use anyhow::{Context, Result};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::fs;
+use sha1::{Digest, Sha1};
+use base64::{engine::general_purpose::STANDARD, Engine as _};
+use std::fmt::Write;
 
 pub fn get_file_hash(path: &Path, store: Option<&Path>) -> Result<String> {
     log::debug!("Calculating file hash for: {}", path.display());
@@ -195,4 +199,90 @@ pub fn expand_path(path_str: &str) -> PathBuf {
         }
     }
     PathBuf::from(path_str)
+}
+
+pub fn get_sort_key(filepath: &Path) -> (u8, u32, String) {
+    if let Ok(tag) = metaflac::Tag::read_from_path(filepath)
+        && let Some(vc) = tag.vorbis_comments()
+        && let Some(track_nums) = vc.get("TRACKNUMBER")
+        && let Some(num_str) = track_nums.first()
+    {
+        let num_part = num_str.split('/').next().unwrap_or("0");
+        if let Ok(n) = num_part.parse::<u32>() {
+            return (0, n, String::new());
+        }
+    }
+    let filename = filepath.file_name().unwrap_or_default().to_string_lossy().to_string();
+    (1, 0, filename)
+}
+
+pub fn resolve_ctdbtocid(folder_path: &Path) -> Option<String> {
+    let mut files: Vec<PathBuf> = fs::read_dir(folder_path)
+        .into_iter()
+        .flatten()
+        .filter_map(std::result::Result::ok)
+        .map(|entry| entry.path())
+        .filter(|p| p.extension().and_then(|s| s.to_str()) == Some("flac"))
+        .collect();
+
+    if files.is_empty() {
+        return None;
+    }
+
+    files.sort_by(|a, b| {
+        let key_a = get_sort_key(a);
+        let key_b = get_sort_key(b);
+        
+        match key_a.0.cmp(&key_b.0) {
+            std::cmp::Ordering::Equal => {
+                match key_a.1.cmp(&key_b.1) {
+                    std::cmp::Ordering::Equal => alphanumeric_sort::compare_path(a, b),
+                    other => other,
+                }
+            },
+            other => other,
+        }
+    });
+
+    let mut offsets = Vec::new();
+    let mut current_offset = 150;
+
+    for f in &files {
+        if let Ok(tag) = metaflac::Tag::read_from_path(f)
+            && let Some(info) = tag.get_streaminfo()
+        {
+            let sectors = info.total_samples / 588;
+            offsets.push(current_offset);
+            current_offset += sectors;
+        }
+    }
+    
+    if offsets.is_empty() {
+        return None;
+    }
+
+    let leadout = current_offset;
+    let pregap = offsets[0];
+
+    let mut x = String::new();
+    for offset in offsets.iter().skip(1) {
+        let _ = write!(x, "{:08X}", offset - pregap);
+    }
+    let _ = write!(x, "{:08X}", leadout - pregap);
+
+    while x.len() < 800 {
+        x.push('0');
+    }
+
+    let mut hasher = Sha1::new();
+    hasher.update(x.as_bytes());
+    let sha1_bytes = hasher.finalize();
+
+    let ctdb = STANDARD
+        .encode(sha1_bytes)
+        .replace('+', ".")
+        .replace('/', "_")
+        .replace('=', "-");
+
+    Some(ctdb)
 }

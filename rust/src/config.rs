@@ -6,6 +6,7 @@ use std::path::PathBuf;
 pub struct AppConfig {
     pub store: Option<String>,
     pub origin: Option<String>,
+    pub environment: Option<String>,
 }
 
 impl AppConfig {
