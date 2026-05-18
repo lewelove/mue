@@ -5,7 +5,7 @@ use std::process::Command;
 use std::fs;
 use serde_json::{json, Value};
 
-pub fn run(path_str: &str, tracks_filter: &str, torrent_path: Option<&str>, metadata_path: Option<&str>) -> Result<()> {
+pub fn run(path_str: &str, tracks_filter: &str, torrent_path: Option<&str>, metadata_path: Option<&str>, intermediary: bool) -> Result<()> {
     let target_dir = Path::new(path_str).canonicalize().unwrap_or_else(|_| PathBuf::from(path_str));
     
     let album_nix_path = target_dir.join("album.nix");
@@ -149,6 +149,11 @@ pub fn run(path_str: &str, tracks_filter: &str, torrent_path: Option<&str>, meta
     data["tracks"] = json!(tracks_list);
 
     sanitize_quotes(&mut data);
+
+    if intermediary {
+        println!("{}", serde_json::to_string_pretty(&data)?);
+        return Ok(());
+    }
 
     let json_str = serde_json::to_string(&data)?;
     let temp_path = target_dir.join(".munix-tmp.json");

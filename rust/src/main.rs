@@ -36,6 +36,8 @@ enum Commands {
         tracks: String,
         #[arg(long)]
         metadata: Option<String>,
+        #[arg(long)]
+        intermediary: bool,
     },
     Fetch {
         #[arg(long)]
@@ -68,8 +70,8 @@ fn main() -> Result<()> {
                 std::process::exit(1);
             }
         }
-        Commands::Manifest { torrent, path, tracks, metadata } => {
-            if let Err(e) = manifest::run(&path, &tracks, torrent.as_deref(), metadata.as_deref()) {
+        Commands::Manifest { torrent, path, tracks, metadata, intermediary } => {
+            if let Err(e) = manifest::run(&path, &tracks, torrent.as_deref(), metadata.as_deref(), intermediary) {
                 log::error!("{}", e);
                 std::process::exit(1);
             }

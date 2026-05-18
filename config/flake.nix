@@ -26,7 +26,8 @@
     };
 
     lib = {
-      albumNixTemplate = { data }: import ./template.nix { inherit data; lib = pkgs.lib; };
+      albumNixTemplate = { data }: import ./album.nix.template.nix { inherit data; lib = pkgs.lib; };
+      metadataTomlTemplate = { data }: import ./metadata.toml.template.nix { inherit data; lib = pkgs.lib; };
 
       evalConfig = albumArgs: let
         envOrigin = builtins.getEnv "MUNIX_ORIGIN_PATH";
@@ -144,42 +145,7 @@
         discPadLen = builtins.stringLength (toString maxDisc);
         trackPadLen = pkgs.lib.max 2 (builtins.stringLength (toString maxTrack));
 
-        toTomlVal = v:
-          if builtins.isString v then "\"${pkgs.lib.escape ["\"" "\\"] v}\""
-          else if builtins.isInt v then toString v
-          else if builtins.isBool v then (if v then "true" else "false")
-          else if builtins.isList v then "[ " + pkgs.lib.concatMapStringsSep ", " toTomlVal v + " ]"
-          else "\"\"";
-        
-        toTomlTable = order: data: let
-          orderedLines = pkgs.lib.concatMap (pathStr:
-            if pathStr == "\n" then [ "" ]
-            else let
-              parts = pkgs.lib.splitString "." pathStr;
-              manifest = builtins.elemAt parts 0;
-              key = builtins.elemAt parts 1;
-            in if builtins.isAttrs (data.${manifest} or null) && data.${manifest} ? ${key}
-               then [ "${key} = ${toTomlVal data.${manifest}.${key}}" ]
-               else []
-          ) order;
-          
-          rawLines = orderedLines;
-          cleanLines = pkgs.lib.foldl' (acc: x: 
-            if x != "" 
-            then acc ++ [x] 
-            else if (acc != [] && pkgs.lib.last acc == "") 
-            then acc 
-            else acc ++ [x]
-          ) [] rawLines;
-          tightLines = if cleanLines != [] && pkgs.lib.last cleanLines == "" then pkgs.lib.init cleanLines else cleanLines;
-        in pkgs.lib.concatStringsSep "\n" tightLines;
-
-        metadataToml = let
-          aTable = toTomlTable (config.keys.album or []) album;
-          aS = if aTable != "" then "[album]\n${aTable}" else "";
-          tS = pkgs.lib.concatMapStringsSep "\n\n" (t: let table = toTomlTable (config.keys.tracks or []) t; in if table != "" then "[[tracks]]\n${table}" else "[[tracks]]") tracks;
-          sep = if aS != "" && tS != "" then "\n\n" else "";
-        in pkgs.writeText "metadata.toml" (aS + sep + tS + "\n");
+        metadataToml = pkgs.writeText "metadata.toml" (self.lib.metadataTomlTemplate { data = args; });
 
         envOrigin = builtins.getEnv "MUNIX_ORIGIN_PATH";
         envSanitizedSourceName = builtins.getEnv "MUNIX_SANITIZED_SOURCE_NAME";
