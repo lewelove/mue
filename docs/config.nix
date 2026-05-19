@@ -12,7 +12,50 @@
   # tips:
   #   - point both to large storage disk
   #   - backup store periodically; it is the actual source of your entire library
-  #   - to garbage collect old albums not in current use run `nix store gc --store {store}`
+  #   - to garbage collect old albums not in current use run `nix store gc --store ${store}`
+
+  # determines existence of additional libaries based on extention
+  library = {
+
+    # FLAC library
+    # album counts towards one if all input tracks have .flac extension
+    flac = {
+
+      # will flac albums be built at all
+      enable = true;
+
+      # path to directory where flac album folders will be created
+      # naming pattern "AlbumArtist - Album" is used
+      # each album folder is populated purely by symlinks to custom store by rust
+      root = "";
+
+      # will flac album contents be linked by rust to folder containing album.nix
+      link_to_album_root = true;
+
+      # will flac album contents be linked by rust to folder in library.flac.root
+      link_to_library_root = true;
+    };
+
+    # OPUS library
+    opus = {
+
+      # will albums be built to have .opus clones
+      enable = true;
+
+      # used as argument for conversion
+      # optional: defaults to 128 if missing
+      kbps = 128;
+
+      # path to directory where opus album clone folders will be created
+      root = "";
+
+      # will opus album contents be linked by rust to folder containing album.nix
+      link_to_album_root = false;
+
+      # will opus album contents be linked by rust to folder in library.opus.root
+      link_to_library_root = true;
+    };
+  };
 
   # commands to run on `fetch` and `build`
   # ${origin.path} resolution happens automatically based on --source specified

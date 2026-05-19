@@ -3,10 +3,35 @@ use std::process::Command;
 use std::path::PathBuf;
 
 #[derive(Deserialize, Default)]
+pub struct OpusConfig {
+    pub enable: Option<bool>,
+    #[allow(dead_code)]
+    pub kbps: Option<u32>,
+    pub root: Option<String>,
+    pub link_to_album_root: Option<bool>,
+    pub link_to_library_root: Option<bool>,
+}
+
+#[derive(Deserialize, Default)]
+pub struct FlacConfig {
+    pub enable: Option<bool>,
+    pub root: Option<String>,
+    pub link_to_album_root: Option<bool>,
+    pub link_to_library_root: Option<bool>,
+}
+
+#[derive(Deserialize, Default)]
+pub struct LibraryConfig {
+    pub flac: Option<FlacConfig>,
+    pub opus: Option<OpusConfig>,
+}
+
+#[derive(Deserialize, Default)]
 pub struct AppConfig {
     pub store: Option<String>,
     pub origin: Option<String>,
     pub environment: Option<String>,
+    pub library: Option<LibraryConfig>,
 }
 
 impl AppConfig {

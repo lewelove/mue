@@ -17,6 +17,7 @@
           pkgs.shntool
           pkgs.cuetools
           pkgs.flac
+          pkgs.opus-tools
           pkgs.imagemagick
           pkgs.jq
           pkgs.stdenv
@@ -95,6 +96,25 @@
         '';
       };
 
+      mkOpusTrack = { name, src, relPath, kbps ? 128, tags ? [], cover ? null }: pkgs.stdenv.mkDerivation {
+        inherit name src relPath kbps;
+        buildInputs = [ pkgs.opus-tools ];
+        unpackPhase = "true";
+        buildPhase = ''
+          cp "$src/$relPath" track.flac
+          chmod +w track.flac
+          
+          opusenc --bitrate "$kbps" \
+            ${if cover != null then "--picture \"${cover}/cover.png\"" else ""} \
+            ${pkgs.lib.concatMapStringsSep " " (t: "--comment \"${pkgs.lib.escape ["\"" "\\" "$"] t}\"") tags} \
+            track.flac track.opus
+        '';
+        installPhase = ''
+          mkdir -p $out
+          cp track.opus $out/track.opus
+        '';
+      };
+
       mkAlbum = args@{ 
         name, 
         origin ? { path = ""; hash = ""; },
@@ -133,7 +153,16 @@
             else [ "${tag}=${toString val}" ]
           ) (config.writeFlacKeys or {}));
 
-        in { inherit track disc trk title resolvedTags; }) tracks;
+          resolvedOpusTags = pkgs.lib.concatLists (pkgs.lib.mapAttrsToList (tag: pathStr: 
+            let 
+              val = resolvePath dataCtx pathStr;
+            in
+            if val == null || val == "" || val == [] then []
+            else if builtins.isList val then builtins.map (v: "${tag}=${toString v}") val
+            else [ "${tag}=${toString val}" ]
+          ) (config.writeOpusKeys or {}));
+
+        in { inherit track disc trk title resolvedTags resolvedOpusTags; }) tracks;
 
         maxDisc = builtins.foldl' (acc: t: pkgs.lib.max acc t.disc) 1 trackContexts;
         maxTrack = builtins.foldl' (acc: t: pkgs.lib.max acc t.trk) 1 trackContexts;
@@ -197,39 +226,61 @@
                          )
                          else null;
         
-        builtTracks = builtins.map (tc: let
+        opusKbps = config.library.opus.kbps or 128;
+
+        mkOutputDerivation = ext: buildTracks: pkgs.stdenv.mkDerivation {
+          name = "${name}-${ext}";
+          src = realSrc;
+          passthru = {
+            sourceStorePath = realSrc;
+            rawArgs = args;
+          };
+          unpackPhase = "true";
+          buildPhase = ''
+            mkdir -p $out
+            ${pkgs.lib.strings.concatMapStringsSep "\n" (t: ''
+              ln -s "${t.drv}/track.${ext}" "$out/${t.fileName}"
+            '') buildTracks}
+            cp ${metadataToml} $out/metadata.toml
+          '';
+          installPhase = "true";
+        };
+
+        flacTracks = builtins.map (tc: let
           discStr = pkgs.lib.fixedWidthString discPadLen "0" (toString tc.disc);
           trkStr = pkgs.lib.fixedWidthString trackPadLen "0" (toString tc.trk);
           fileName = if maxDisc == 1 then "${trkStr} - ${tc.title}.flac" else "${discStr}.${trkStr} - ${tc.title}.flac";
         in {
           inherit fileName;
           drv = self.lib.mkFlacTrack {
-            name = "${name}-disc${toString tc.disc}-track${toString tc.trk}";
+            name = "${name}-flac-disc${toString tc.disc}-track${toString tc.trk}";
             src = realSrc;
             relPath = tc.track.file;
             tags = tc.resolvedTags;
             cover = processedCover;
           };
-          disc = tc.disc;
-          trk = tc.trk;
         }) trackContexts;
 
-      in if hasDuplicates then throw "Duplicate discnumber and tracknumber combinations found in tracks." else pkgs.stdenv.mkDerivation {
-        inherit name;
-        src = realSrc;
-        passthru = {
-          sourceStorePath = realSrc;
-          rawArgs = args;
-        };
-        unpackPhase = "true";
-        buildPhase = ''
-          mkdir -p $out
-          ${pkgs.lib.strings.concatMapStringsSep "\n" (t: ''
-            ln -s "${t.drv}/track.flac" "$out/${t.fileName}"
-          '') builtTracks}
-          cp ${metadataToml} $out/metadata.toml
-        '';
-        installPhase = "true";
+        opusTracks = builtins.map (tc: let
+          discStr = pkgs.lib.fixedWidthString discPadLen "0" (toString tc.disc);
+          trkStr = pkgs.lib.fixedWidthString trackPadLen "0" (toString tc.trk);
+          fileName = if maxDisc == 1 then "${trkStr} - ${tc.title}.opus" else "${discStr}.${trkStr} - ${tc.title}.opus";
+        in {
+          inherit fileName;
+          drv = self.lib.mkOpusTrack {
+            name = "${name}-opus-disc${toString tc.disc}-track${toString tc.trk}";
+            src = realSrc;
+            relPath = tc.track.file;
+            tags = tc.resolvedOpusTags;
+            cover = processedCover;
+            kbps = opusKbps;
+          };
+        }) trackContexts;
+
+      in if hasDuplicates then throw "Duplicate discnumber and tracknumber combinations found in tracks." else pkgs.lib.optionalAttrs (config.library.flac.enable or false) {
+        flac = mkOutputDerivation "flac" flacTracks;
+      } // pkgs.lib.optionalAttrs (config.library.opus.enable or false) {
+        opus = mkOutputDerivation "opus" opusTracks;
       };
     };
   };
