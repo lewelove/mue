@@ -5,7 +5,7 @@ mod fetch;
 mod manifest;
 
 #[derive(Parser)]
-#[command(name = "muet", version = "0.1.0")]
+#[command(name = "mue", version = "0.1.0")]
 struct Cli {
     #[arg(global = true, long)]
     debug: bool,

@@ -22,7 +22,7 @@ pub fn fetch_musicbrainz_data(url: &str) -> Result<Value> {
     let is_rg = mode == "release-group";
 
     let cache_dir = dirs::home_dir()
-        .map(|h| h.join(".cache/muet").join(mode))
+        .map(|h| h.join(".cache/mue").join(mode))
         .context("Could not resolve cache directory")?;
     fs::create_dir_all(&cache_dir)?;
 
@@ -33,7 +33,7 @@ pub fn fetch_musicbrainz_data(url: &str) -> Result<Value> {
     }
 
     let client = reqwest::blocking::Client::builder()
-        .user_agent("Muet/0.1.0 ( https://github.com/lewelove/muet )")
+        .user_agent("Mue/0.1.0 ( https://github.com/lewelove/mue )")
         .build()?;
 
     let mut data = json!({ "_is_rg": is_rg });

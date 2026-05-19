@@ -1,6 +1,6 @@
 use anyhow::Result;
-use libmuet::utils::{eval_config_field, resolve_album_path, ground_logical_path, expand_path};
-use libmuet::config::AppConfig;
+use libmue::utils::{eval_config_field, resolve_album_path, ground_logical_path, expand_path};
+use libmue::config::AppConfig;
 use std::collections::HashMap;
 use std::process::Command;
 
@@ -14,7 +14,7 @@ pub fn run(source: &str, path: &str) -> Result<()> {
     let album_path = resolve_album_path(path)?;
     let origin_base_path = expand_path(config.origin.as_deref().unwrap_or("."));
 
-    let res = libmuet::utils::resolve_source_origin(
+    let res = libmue::utils::resolve_source_origin(
         &album_path,
         Some(source),
         &store_path,
@@ -28,9 +28,9 @@ pub fn run(source: &str, path: &str) -> Result<()> {
 
     let mut envs = HashMap::new();
     log::debug!("Using origin path: {}", res.origin_path);
-    envs.insert("MUET_ORIGIN_PATH".to_string(), res.origin_path);
-    envs.insert("MUET_SOURCE_NAME".to_string(), res.internal_name);
-    envs.insert("MUET_SANITIZED_SOURCE_NAME".to_string(), res.sanitized_name);
+    envs.insert("MUE_ORIGIN_PATH".to_string(), res.origin_path);
+    envs.insert("MUE_SOURCE_NAME".to_string(), res.internal_name);
+    envs.insert("MUE_SANITIZED_SOURCE_NAME".to_string(), res.sanitized_name);
 
     let cmd_field = match source {
         "torrent" => "commands.torrent.fetch",

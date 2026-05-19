@@ -1,4 +1,4 @@
-# this file is a documentation of ~/.config/muet/config.nix
+# this file is a documentation of ~/.config/mue/config.nix
 
 {
   # path to custom store
@@ -64,20 +64,20 @@
     # --source torrent
     torrent = {
 
-      # runs at `muet fetch`
+      # runs at `mue fetch`
       # reads the torrent file and starts download to origin
       # recommended command:
       # fetch = "transmission-remote -a '${source.torrent.file}' -w '${origin.path}'";
       fetch = "";
 
-      # runs at `muet build`
+      # runs at `mue build`
       # used to verify 100% seedability and pairity to ${source.torrent.file}
       # skipped if auto-resolved ${origin.path} is already in custom store
       # recommended command:
       # verify = "imdl torrent verify '${source.torrent.file}' --content '${origin.path}/${source.torrent.name}'";
       verify = "";
 
-      # runs after successful `muet build`
+      # runs after successful `mue build`
       # used to ping the torrent daemon with custom-store-bound ${origin.path} to seed from it directly
       seed = "transmission-remote -a '${source.torrent.file}' -w '${origin.path}'";
     };
@@ -85,7 +85,7 @@
     # --source torrent
     web = {
 
-      # runs at `muet fetch`
+      # runs at `mue fetch`
       # recommended command:
       # fetch = "curl -L '${source.web.url}' -o '${origin.path}'";
       fetch = "";

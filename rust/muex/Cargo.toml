@@ -11,4 +11,4 @@ clap = { version = "4.4", features = ["derive"] }
 anyhow = "1.0"
 log = "0.4"
 simple_logger = "5.0"
-libmuet = { path = "../libmuet" }
+libmue = { path = "../libmue" }

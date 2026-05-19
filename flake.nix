@@ -1,5 +1,5 @@
 {
-  description = "Muet Development Environment";
+  description = "Mue Development Environment";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -28,15 +28,15 @@
           '';
         };
 
-        muet-bin = pkgs.writeShellApplication {
-          name = "muet";
+        mue-bin = pkgs.writeShellApplication {
+          name = "mue";
           runtimeInputs = [ pkgs.git ];
           text = ''
             ROOT=$(git rev-parse --show-toplevel)
-            BIN="$ROOT/rust/target/release/muet"
+            BIN="$ROOT/rust/target/release/mue"
             
             if [ ! -f "$BIN" ]; then
-              echo "Error: muet binary not found at $BIN."
+              echo "Error: mue binary not found at $BIN."
               echo "Run 'build --release' first."
               exit 1
             fi
@@ -71,7 +71,7 @@
           rustfmt
           clippy
           build-cli
-          muet-bin
+          mue-bin
           muex-bin
           nix
           intermodal

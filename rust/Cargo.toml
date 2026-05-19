@@ -1,8 +1,8 @@
 [workspace]
 
 members = [
-    "libmuet",
-    "muet",
+    "libmue",
+    "mue",
     "muex"
 ]
 

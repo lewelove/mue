@@ -839,7 +839,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "68ab91017fe16c622486840e4c83c9a37afeff978bd239b5293d61ece587de66"
 
 [[package]]
-name = "libmuet"
+name = "libmue"
 version = "0.1.0"
 dependencies = [
  "alphanumeric-sort",
@@ -921,14 +921,14 @@ dependencies = [
 ]
 
 [[package]]
-name = "muet"
+name = "mue"
 version = "0.1.0"
 dependencies = [
  "alphanumeric-sort",
  "anyhow",
  "clap",
  "lava_torrent",
- "libmuet",
+ "libmue",
  "log",
  "serde_json",
  "simple_logger",
@@ -941,7 +941,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
- "libmuet",
+ "libmue",
  "log",
  "simple_logger",
 ]

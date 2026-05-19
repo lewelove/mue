@@ -37,7 +37,7 @@ pub struct AppConfig {
 impl AppConfig {
     #[must_use] 
     pub fn load() -> Self {
-        let flake_uri = crate::utils::get_muet_flake_uri();
+        let flake_uri = crate::utils::get_mue_flake_uri();
         let expr = format!("builtins.toJSON ((builtins.getFlake \"{flake_uri}\").lib.evalConfig {{}})");
         
         let output = Command::new("nix")
