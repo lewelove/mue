@@ -32,6 +32,32 @@ pub fn build_globset(tracks_filter: &str) -> Result<globset::GlobSet> {
     Ok(builder.build()?)
 }
 
+pub fn detect_source_type(path: &Path, store: Option<&Path>) -> Result<String> {
+    let path_str = path.to_string_lossy();
+    let expr = format!(
+        "let res = (import (/. + \"{path_str}\") {{ mue = {{ mkAlbum = x: x; }}; }}); in \
+         if res ? source then \
+             if res.source ? torrent then \"torrent\" \
+             else if res.source ? web then \"web\" \
+             else \"\" \
+         else \"\""
+    );
+    log::debug!("Detecting source type for {}", path.display());
+    let mut cmd = Command::new("nix");
+    if let Some(s) = store {
+        cmd.args(["--store", s.to_str().unwrap()]);
+    }
+    cmd.args(["eval", "--raw", "--impure", "--expr", &expr]);
+    let output = cmd.output().context("Failed to execute nix eval for source type")?;
+    if !output.status.success() {
+        let err = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("{err}");
+    }
+    let result = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    log::debug!("Detected source type: {result}");
+    Ok(result)
+}
+
 pub fn resolve_source_origin(
     target_path: &Path,
     source_type: Option<&str>,

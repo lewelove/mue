@@ -14,7 +14,7 @@ pub fn run() -> Result<()> {
     
     for album_dir in albums {
         let path_str = album_dir.to_string_lossy().to_string();
-        let _ = crate::album::build::run(&path_str, None, None);
+        let _ = crate::album::build::run(&path_str, None);
     }
     
     crate::library::migrate_store::run()?;

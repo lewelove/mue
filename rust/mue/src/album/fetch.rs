@@ -4,14 +4,20 @@ use libmue::config::AppConfig;
 use std::collections::HashMap;
 use std::process::Command;
 
-pub fn run(source: &str, path: &str) -> Result<()> {
+pub fn run(path: &str) -> Result<()> {
     log::debug!("Starting fetch operation");
-    log::debug!("Source: {source}");
     log::debug!("Target path: {path}");
 
     let config = AppConfig::load();
     let store_path = config.get_store_path();
     let album_path = resolve_album_path(path)?;
+    
+    let source_type_str = libmue::utils::detect_source_type(&album_path, Some(&store_path))?;
+    if source_type_str.is_empty() {
+        anyhow::bail!("No valid source found in album.nix");
+    }
+    let source = source_type_str.as_str();
+
     let origin_base_path = expand_path(config.origin.as_deref().unwrap_or("."));
 
     let res = libmue::utils::resolve_source_origin(

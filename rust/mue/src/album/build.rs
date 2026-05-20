@@ -29,7 +29,7 @@ fn sync_env(store_path: &Path) -> Result<()> {
 }
 
 #[allow(clippy::too_many_lines)]
-pub fn run(path: &str, source_type: Option<&str>, _flake: Option<&str>) -> Result<()> {
+pub fn run(path: &str, _flake: Option<&str>) -> Result<()> {
     log::debug!("Starting mue build for path: {path}");
 
     let config = AppConfig::load();
@@ -43,6 +43,9 @@ pub fn run(path: &str, source_type: Option<&str>, _flake: Option<&str>) -> Resul
 
     let target_path = resolve_album_path(path)?;
     let target_dir = target_path.parent().unwrap();
+
+    let source_type_str = libmue::utils::detect_source_type(&target_path, Some(&store_path))?;
+    let source_type = if source_type_str.is_empty() { None } else { Some(source_type_str.as_str()) };
 
     if source_type == Some("torrent") {
         log::debug!("Source type is torrent, initiating pre-verify sequence");

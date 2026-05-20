@@ -31,13 +31,9 @@ enum AlbumCommands {
         #[arg(default_value = ".")]
         path: String,
         #[arg(long)]
-        source: Option<String>,
-        #[arg(long)]
         flake: Option<String>,
     },
     Fetch {
-        #[arg(long)]
-        source: String,
         #[arg(default_value = ".")]
         path: String,
     },
@@ -81,14 +77,14 @@ fn main() {
 
     match cli.command {
         Commands::Album { command } => match command {
-            AlbumCommands::Build { path, source, flake } => {
-                if let Err(e) = album::build::run(&path, source.as_deref(), flake.as_deref()) {
+            AlbumCommands::Build { path, flake } => {
+                if let Err(e) = album::build::run(&path, flake.as_deref()) {
                     log::error!("{e}");
                     std::process::exit(1);
                 }
             }
-            AlbumCommands::Fetch { source, path } => {
-                if let Err(e) = album::fetch::run(&source, &path) {
+            AlbumCommands::Fetch { path } => {
+                if let Err(e) = album::fetch::run(&path) {
                     log::error!("{e}");
                     std::process::exit(1);
                 }
