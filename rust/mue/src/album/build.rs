@@ -202,7 +202,7 @@ pub fn run(path: &str, source_type: Option<&str>, _flake: Option<&str>) -> Resul
         }
     }
 
-    crate::library::migrate_store()?;
+    crate::library::migrate_store::run()?;
 
     log::info!("Build completed successfully.");
     Ok(())

@@ -4,7 +4,7 @@ use std::fs;
 use std::path::PathBuf;
 use walkdir::WalkDir;
 
-pub fn migrate_store() -> Result<()> {
+pub fn run() -> Result<()> {
     let config = AppConfig::load();
     let store_path = config.get_store_path();
     
@@ -42,37 +42,5 @@ pub fn migrate_store() -> Result<()> {
             }
         }
     }
-    Ok(())
-}
-
-pub fn rebuild() -> Result<()> {
-    let cwd = std::env::current_dir()?;
-    let mut albums = Vec::new();
-    
-    for entry in WalkDir::new(&cwd).into_iter().filter_map(Result::ok) {
-        if entry.file_name() == "album.nix"
-            && let Some(parent) = entry.path().parent() {
-            albums.push(parent.to_path_buf());
-        }
-    }
-    
-    for album_dir in albums {
-        let path_str = album_dir.to_string_lossy().to_string();
-        let _ = crate::build::run(&path_str, None, None);
-    }
-    
-    migrate_store()?;
-    Ok(())
-}
-
-pub fn init(path: &str) -> Result<()> {
-    let target = libmue::utils::expand_path(path);
-    fs::create_dir_all(&target)?;
-    
-    let _ = std::process::Command::new("git")
-        .arg("init")
-        .current_dir(&target)
-        .status();
-        
     Ok(())
 }
